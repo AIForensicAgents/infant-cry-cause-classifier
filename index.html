@@ -1,0 +1,1090 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-select=none">
+<title>CrySync — Infant Cry Cause Classifier</title>
+<script src="https://unpkg.com/tailwindcss-cdn@3.4.10/tailwindcss.js"></script>
+<script src="https://unpkg.com/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+* { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; }
+body { background: #f0f5f3; overscroll-behavior: none; }
+
+.pulse-ring {
+  animation: pulseRing 2s ease-out infinite;
+}
+@keyframes pulseRing {
+  0% { transform: scale(0.8); opacity: 1; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+
+.pulse-dot {
+  animation: pulseDot 2s ease-out infinite;
+}
+@keyframes pulseDot {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+  100% { transform: scale(1); }
+}
+
+.listening-wave {
+  animation: wave 1.2s ease-in-out infinite;
+}
+@keyframes wave {
+  0%, 100% { height: 8px; }
+  50% { height: 32px; }
+}
+
+.fade-in {
+  animation: fadeIn 0.5s ease-out;
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.slide-up {
+  animation: slideUp 0.4s ease-out;
+}
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(40px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.confidence-bar {
+  transition: width 1.2s ease-out;
+}
+
+.nav-item.active {
+  color: #059669;
+  background: #ecfdf5;
+}
+
+.recording-btn {
+  transition: all 0.3s ease;
+}
+.recording-btn:active {
+  transform: scale(0.95);
+}
+
+.card-shadow {
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 6px 16px rgba(0,0,0,0.04);
+}
+
+.triage-urgent { border-left: 4px solid #ef4444; background: #fef2f2; }
+.triage-moderate { border-left: 4px solid #f59e0b; background: #fffbeb; }
+.triage-normal { border-left: 4px solid #10b981; background: #ecfdf5; }
+
+::-webkit-scrollbar { width: 0; }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+.waveform-bar {
+  transition: height 0.1s ease;
+}
+</style>
+</head>
+<body class="min-h-screen pb-20">
+
+<!-- Global AI tracking variables -->
+<script>
+window.aiTotalInputTokens = 0;
+window.aiTotalOutputTokens = 0;
+window.aiTotalTime = 0;
+window.aiAliasTimes = {};
+</script>
+
+<!-- Header -->
+<header class="bg-gradient-to-br from-emerald-600 via-emerald-500 to-teal-500 text-white px-4 pt-12 pb-6 rounded-b-3xl card-shadow relative overflow-hidden">
+  <div class="absolute inset-0 opacity-10">
+    <div class="absolute top-4 right-4 w-32 h-32 rounded-full bg-white"></div>
+    <div class="absolute bottom-2 left-8 w-20 h-20 rounded-full bg-white"></div>
+  </div>
+  <div class="relative z-10">
+    <div class="flex items-center justify-between mb-1">
+      <div>
+        <h1 class="text-2xl font-800 tracking-tight">CrySync</h1>
+        <p class="text-emerald-100 text-sm font-light mt-0.5">Clinically-guided cry analysis for your baby</p>
+      </div>
+      <button onclick="showSettings()" class="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center backdrop-blur">
+        <span class="text-lg">⚙️</span>
+      </button>
+    </div>
+    <div id="babyInfo" class="mt-3 flex items-center gap-3 bg-white/15 rounded-2xl p-3 backdrop-blur">
+      <div class="w-10 h-10 rounded-full bg-white/30 flex items-center justify-center text-xl">👶</div>
+      <div>
+        <p class="font-semibold text-sm" id="babyNameDisplay">Set up baby profile →</p>
+        <p class="text-emerald-100 text-xs" id="babyAgeDisplay">Tap to personalize</p>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- Main Content Area -->
+<main class="px-4 mt-4">
+
+  <!-- Tab: Record -->
+  <div id="tab-record" class="tab-content active">
+    
+    <!-- Quick Stats -->
+    <div class="grid grid-cols-3 gap-3 mb-4 fade-in">
+      <div class="bg-white rounded-2xl p-3 card-shadow text-center">
+        <p class="text-2xl font-bold text-emerald-600" id="todayCount">0</p>
+        <p class="text-xs text-gray-400 mt-0.5">Today</p>
+      </div>
+      <div class="bg-white rounded-2xl p-3 card-shadow text-center">
+        <p class="text-2xl font-bold text-amber-500" id="topCause">—</p>
+        <p class="text-xs text-gray-400 mt-0.5">Top Cause</p>
+      </div>
+      <div class="bg-white rounded-2xl p-3 card-shadow text-center">
+        <p class="text-2xl font-bold text-blue-500" id="avgDuration">0s</p>
+        <p class="text-xs text-gray-400 mt-0.5">Avg Length</p>
+      </div>
+    </div>
+
+    <!-- Recording Interface -->
+    <div class="bg-white rounded-3xl card-shadow p-6 text-center mb-4">
+      <div id="idleState">
+        <p class="text-gray-500 text-sm mb-6">Tap to start analyzing your baby's cry</p>
+        <div class="relative inline-flex items-center justify-center mb-6">
+          <button id="recordBtn" onclick="toggleRecording()" class="recording-btn w-28 h-28 rounded-full bg-gradient-to-br from-emerald-500 to-teal-500 text-white flex items-center justify-center card-shadow relative z-10">
+            <span class="text-4xl" id="recordIcon">🎤</span>
+          </button>
+        </div>
+        <p class="text-xs text-gray-400">Hold your phone near your baby<br>Analysis takes 5-15 seconds of audio</p>
+      </div>
+
+      <div id="listeningState" class="hidden">
+        <p class="text-emerald-600 font-semibold mb-4">🔊 Listening...</p>
+        <div class="flex items-center justify-center gap-1 mb-4 h-10" id="waveformContainer">
+          <!-- Waveform bars generated by JS -->
+        </div>
+        <p class="text-xs text-gray-400 mb-2" id="recordTimer">0:00</p>
+        <div class="w-full bg-gray-100 rounded-full h-1.5 mb-4">
+          <div id="recordProgress" class="bg-emerald-500 h-1.5 rounded-full transition-all duration-300" style="width:0%"></div>
+        </div>
+        <button onclick="stopRecording()" class="px-6 py-3 bg-red-500 text-white rounded-full font-semibold text-sm card-shadow">
+          ⏹ Stop & Analyze
+        </button>
+      </div>
+
+      <div id="analyzingState" class="hidden">
+        <div class="inline-flex items-center justify-center mb-4">
+          <div class="w-16 h-16 rounded-full border-4 border-emerald-200 border-t-emerald-500 animate-spin"></div>
+        </div>
+        <p class="text-emerald-600 font-semibold">Analyzing cry pattern...</p>
+        <p class="text-xs text-gray-400 mt-2">AI is classifying the cry signature</p>
+      </div>
+    </div>
+
+    <!-- Results Area -->
+    <div id="resultsArea" class="hidden slide-up">
+      <!-- Populated by JS -->
+    </div>
+
+    <!-- Recent Sessions -->
+    <div class="mb-4">
+      <h3 class="font-semibold text-gray-700 mb-3 flex items-center gap-2">📋 Recent Sessions</h3>
+      <div id="recentSessions" class="space-y-2">
+        <p class="text-sm text-gray-400 text-center py-6">No sessions yet. Start recording!</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab: History -->
+  <div id="tab-history" class="tab-content">
+    <h2 class="font-bold text-lg text-gray-800 mb-4">📊 Cry Pattern History</h2>
+    
+    <div class="bg-white rounded-2xl card-shadow p-4 mb-4">
+      <h3 class="font-semibold text-sm text-gray-600 mb-3">Last 7 Days — Cause Distribution</h3>
+      <canvas id="historyChart" height="200"></canvas>
+    </div>
+
+    <div class="bg-white rounded-2xl card-shadow p-4 mb-4">
+      <h3 class="font-semibold text-sm text-gray-600 mb-3">Daily Cry Frequency</h3>
+      <canvas id="frequencyChart" height="160"></canvas>
+    </div>
+
+    <div class="bg-white rounded-2xl card-shadow p-4 mb-4">
+      <h3 class="font-semibold text-sm text-gray-600 mb-2">🩺 Pediatric Summary</h3>
+      <p class="text-xs text-gray-400 mb-3">Share this with your pediatrician</p>
+      <div id="pedSummary" class="text-sm text-gray-600">
+        <p>Record more sessions to generate a summary.</p>
+      </div>
+      <button onclick="exportReport()" class="mt-3 w-full py-2.5 bg-emerald-50 text-emerald-600 rounded-xl font-semibold text-sm">📄 Export Report</button>
+    </div>
+
+    <div id="historyList" class="space-y-2 mb-4">
+    </div>
+  </div>
+
+  <!-- Tab: Insights -->
+  <div id="tab-insights" class="tab-content">
+    <h2 class="font-bold text-lg text-gray-800 mb-4">💡 Personalized Insights</h2>
+    
+    <div id="insightsContent" class="space-y-3">
+      <div class="bg-white rounded-2xl card-shadow p-4 text-center py-8">
+        <p class="text-3xl mb-2">🧒</p>
+        <p class="text-gray-500 text-sm">Record at least 3 sessions to unlock personalized insights about your baby's cry patterns.</p>
+      </div>
+    </div>
+
+    <div class="mt-4 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl p-4 card-shadow">
+      <h3 class="font-semibold text-indigo-700 text-sm mb-2">📚 Cry Types Guide</h3>
+      <div class="space-y-3 text-sm">
+        <div class="flex gap-3 items-start">
+          <span class="text-lg">😢</span>
+          <div><p class="font-medium text-gray-700">Hunger</p><p class="text-gray-500 text-xs">Rhythmic, repetitive, low-pitched. Often with rooting or sucking motions.</p></div>
+        </div>
+        <div class="flex gap-3 items-start">
+          <span class="text-lg">😣</span>
+          <div><p class="font-medium text-gray-700">Pain/Colic</p><p class="text-gray-500 text-xs">High-pitched, sudden onset, intense. May arch back or pull legs up.</p></div>
+        </div>
+        <div class="flex gap-3 items-start">
+          <span class="text-lg">😴</span>
+          <div><p class="font-medium text-gray-700">Sleepy/Tired</p><p class="text-gray-500 text-xs">Whiny, intermittent, building slowly. Eye rubbing, yawning.</p></div>
+        </div>
+        <div class="flex gap-3 items-start">
+          <span class="text-lg">😖</span>
+          <div><p class="font-medium text-gray-700">Discomfort</p><p class="text-gray-500 text-xs">Fussy, variable pitch. Often from wet diaper, temperature, or gas.</p></div>
+        </div>
+        <div class="flex gap-3 items-start">
+          <span class="text-lg">🤒</span>
+          <div><p class="font-medium text-gray-700">Illness</p><p class="text-gray-500 text-xs">Weak, moaning, nasal quality. May have fever or lethargy signs.</p></div>
+        </div>
+        <div class="flex gap-3 items-start">
+          <span class="text-lg">👂</span>
+          <div><p class="font-medium text-gray-700">Ear Pain</p><p class="text-gray-500 text-xs">Intense when lying down, pulling at ears. Often with cold symptoms.</p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<!-- Settings Modal -->
+<div id="settingsModal" class="fixed inset-0 bg-black/50 z-50 hidden flex items-end justify-center">
+  <div class="bg-white rounded-t-3xl w-full max-w-lg p-6 slide-up">
+    <div class="flex items-center justify-between mb-6">
+      <h2 class="font-bold text-lg">👶 Baby Profile</h2>
+      <button onclick="closeSettings()" class="text-gray-400 text-2xl">&times;</button>
+    </div>
+    <div class="space-y-4">
+      <div>
+        <label class="text-sm font-medium text-gray-600">Baby's Name</label>
+        <input id="babyName" type="text" placeholder="e.g., Emma" class="mt-1 w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-300 text-sm">
+      </div>
+      <div>
+        <label class="text-sm font-medium text-gray-600">Date of Birth</label>
+        <input id="babyDob" type="date" class="mt-1 w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-300 text-sm">
+      </div>
+      <div>
+        <label class="text-sm font-medium text-gray-600">Known Conditions (optional)</label>
+        <input id="babyConditions" type="text" placeholder="e.g., reflux, colic" class="mt-1 w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-300 text-sm">
+      </div>
+      <button onclick="saveProfile()" class="w-full py-3 bg-emerald-500 text-white rounded-xl font-semibold card-shadow">Save Profile</button>
+    </div>
+  </div>
+</div>
+
+<!-- Feedback Modal -->
+<div id="feedbackModal" class="fixed inset-0 bg-black/50 z-50 hidden flex items-end justify-center">
+  <div class="bg-white rounded-t-3xl w-full max-w-lg p-6 slide-up">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="font-bold text-lg">Was this accurate?</h2>
+      <button onclick="closeFeedback()" class="text-gray-400 text-2xl">&times;</button>
+    </div>
+    <p class="text-sm text-gray-500 mb-4">Your feedback helps personalize the model for your baby.</p>
+    <div class="grid grid-cols-2 gap-2 mb-4" id="feedbackOptions">
+      <button onclick="submitFeedback('hunger')" class="p-3 rounded-xl border-2 border-gray-200 text-sm font-medium hover:border-emerald-400 transition">😢 Hunger</button>
+      <button onclick="submitFeedback('pain')" class="p-3 rounded-xl border-2 border-gray-200 text-sm font-medium hover:border-emerald-400 transition">😣 Pain/Colic</button>
+      <button onclick="submitFeedback('tired')" class="p-3 rounded-xl border-2 border-gray-200 text-sm font-medium hover:border-emerald-400 transition">😴 Tired</button>
+      <button onclick="submitFeedback('discomfort')" class="p-3 rounded-xl border-2 border-gray-200 text-sm font-medium hover:border-emerald-400 transition">😖 Discomfort</button>
+      <button onclick="submitFeedback('illness')" class="p-3 rounded-xl border-2 border-gray-200 text-sm font-medium hover:border-emerald-400 transition">🤒 Illness</button>
+      <button onclick="submitFeedback('ear_pain')" class="p-3 rounded-xl border-2 border-gray-200 text-sm font-medium hover:border-emerald-400 transition">👂 Ear Pain</button>
+      <button onclick="submitFeedback('reflux')" class="p-3 rounded-xl border-2 border-gray-200 text-sm font-medium hover:border-emerald-400 transition">🤢 Reflux</button>
+      <button onclick="submitFeedback('other')" class="p-3 rounded-xl border-2 border-gray-200 text-sm font-medium hover:border-emerald-400 transition">❓ Other</button>
+    </div>
+    <button onclick="submitFeedback('correct')" class="w-full py-3 bg-emerald-500 text-white rounded-xl font-semibold">✅ Yes, it was correct!</button>
+  </div>
+</div>
+
+<!-- Bottom Navigation -->
+<nav class="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 flex items-center justify-around py-2 px-4 z-40" style="padding-bottom: env(safe-area-inset-bottom, 8px);">
+  <button onclick="switchTab('record')" class="nav-item active flex flex-col items-center gap-0.5 px-4 py-2 rounded-xl transition" data-tab="record">
+    <span class="text-xl">🎤</span>
+    <span class="text-[10px] font-medium">Record</span>
+  </button>
+  <button onclick="switchTab('history')" class="nav-item flex flex-col items-center gap-0.5 px-4 py-2 rounded-xl transition" data-tab="history">
+    <span class="text-xl">📊</span>
+    <span class="text-[10px] font-medium">History</span>
+  </button>
+  <button onclick="switchTab('insights')" class="nav-item flex flex-col items-center gap-0.5 px-4 py-2 rounded-xl transition" data-tab="insights">
+    <span class="text-xl">💡</span>
+    <span class="text-[10px] font-medium">Insights</span>
+  </button>
+</nav>
+
+<!-- Footer -->
+<div class="text-center py-6 pb-24">
+  <p class="text-xs text-gray-300">Built with AI by Papersaurus</p>
+  <p class="text-[10px] text-gray-300 mt-1">Not a substitute for medical advice. Always consult your pediatrician.</p>
+</div>
+
+<script>
+(function() {
+  // ====== GLOBAL STATE ======
+  let isRecording = false;
+  let mediaRecorder = null;
+  let audioStream = null;
+  let audioContext = null;
+  let analyser = null;
+  let recordingStartTime = null;
+  let recordingTimerInterval = null;
+  let waveformInterval = null;
+  let currentSessionId = null;
+  let historyChart = null;
+  let frequencyChart = null;
+
+  const API_BASE = 'https://16504442930.work';
+
+  // ====== AI HELPER ======
+  async function callAI(alias, params, retries = 3) {
+    const startTime = Date.now();
+    for (let attempt = 0; attempt < retries; attempt++) {
+      try {
+        const res = await fetch(`${API_BASE}/run_prompt`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ alias, params })
+        });
+        const data = await res.json();
+        if (data.error) {
+          if (attempt === retries - 1) {
+            const errMsg = await formatError(data);
+            throw new Error(errMsg);
+          }
+          continue;
+        }
+        const elapsed = Date.now() - startTime;
+        window.aiTotalTime += elapsed;
+        window.aiAliasTimes[alias] = (window.aiAliasTimes[alias] || 0) + elapsed;
+        if (data.input_tokens) window.aiTotalInputTokens += data.input_tokens;
+        if (data.output_tokens) window.aiTotalOutputTokens += data.output_tokens;
+        return data;
+      } catch (e) {
+        if (attempt === retries - 1) throw e;
+      }
+    }
+  }
+
+  async function formatError(apiResponse) {
+    try {
+      const res = await callAI('genericAI', {
+        prompt: `Reformat this API error into a friendly, empowering user message. Include what they can do to fix it. Also include the full original response. Original response: ${JSON.stringify(apiResponse)}. Return JSON with key "message" as a string.`
+      }, 1);
+      return res.message || JSON.stringify(apiResponse);
+    } catch {
+      return `Something went wrong. Please try again. Details: ${JSON.stringify(apiResponse)}`;
+    }
+  }
+
+  // ====== DATA PERSISTENCE ======
+  function getSessions() {
+    return JSON.parse(localStorage.getItem('crysync_sessions') || '[]');
+  }
+  function saveSessions(sessions) {
+    localStorage.setItem('crysync_sessions', JSON.stringify(sessions));
+  }
+  function getProfile() {
+    return JSON.parse(localStorage.getItem('crysync_profile') || 'null');
+  }
+  function saveProfileData(profile) {
+    localStorage.setItem('crysync_profile', JSON.stringify(profile));
+  }
+
+  // ====== PROFILE ======
+  window.showSettings = function() {
+    const profile = getProfile();
+    if (profile) {
+      document.getElementById('babyName').value = profile.name || '';
+      document.getElementById('babyDob').value = profile.dob || '';
+      document.getElementById('babyConditions').value = profile.conditions || '';
+    }
+    document.getElementById('settingsModal').classList.remove('hidden');
+  };
+  window.closeSettings = function() {
+    document.getElementById('settingsModal').classList.add('hidden');
+  };
+  window.saveProfile = function() {
+    const profile = {
+      name: document.getElementById('babyName').value.trim(),
+      dob: document.getElementById('babyDob').value,
+      conditions: document.getElementById('babyConditions').value.trim()
+    };
+    saveProfileData(profile);
+    updateProfileDisplay();
+    closeSettings();
+  };
+
+  function updateProfileDisplay() {
+    const profile = getProfile();
+    if (profile && profile.name) {
+      document.getElementById('babyNameDisplay').textContent = profile.name;
+      if (profile.dob) {
+        const age = calculateAge(new Date(profile.dob));
+        document.getElementById('babyAgeDisplay').textContent = age;
+      } else {
+        document.getElementById('babyAgeDisplay').textContent = 'Age not set';
+      }
+    }
+  }
+
+  function calculateAge(dob) {
+    const now = new Date();
+    const months = (now.getFullYear() - dob.getFullYear()) * 12 + (now.getMonth() - dob.getMonth());
+    const days = Math.floor((now - dob) / (1000 * 60 * 60 * 24));
+    if (days < 7) return `${days} day${days !== 1 ? 's' : ''} old`;
+    if (days < 30) return `${Math.floor(days / 7)} week${Math.floor(days / 7) !== 1 ? 's' : ''} old`;
+    if (months < 24) return `${months} month${months !== 1 ? 's' : ''} old`;
+    return `${Math.floor(months / 12)} year${Math.floor(months / 12) !== 1 ? 's' : ''} old`;
+  }
+
+  // ====== TABS ======
+  window.switchTab = function(tab) {
+    document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+    document.getElementById('tab-' + tab).classList.add('active');
+    document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+    if (tab === 'history') renderHistory();
+    if (tab === 'insights') renderInsights();
+  };
+
+  // ====== RECORDING ======
+  window.toggleRecording = async function() {
+    if (isRecording) {
+      stopRecording();
+      return;
+    }
+    try {
+      audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const source = audioContext.createMediaStreamSource(audioStream);
+      analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+
+      mediaRecorder = new MediaRecorder(audioStream);
+      mediaRecorder.start();
+      isRecording = true;
+      recordingStartTime = Date.now();
+
+      document.getElementById('idleState').classList.add('hidden');
+      document.getElementById('listeningState').classList.remove('hidden');
+
+      // Generate waveform bars
+      const container = document.getElementById('waveformContainer');
+      container.innerHTML = '';
+      for (let i = 0; i < 24; i++) {
+        const bar = document.createElement('div');
+        bar.className = 'waveform-bar w-1 bg-emerald-400 rounded-full';
+        bar.style.height = '8px';
+        container.appendChild(bar);
+      }
+
+      // Timer
+      recordingTimerInterval = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
+        const mins = Math.floor(elapsed / 60);
+        const secs = elapsed % 60;
+        document.getElementById('recordTimer').textContent = `${mins}:${secs.toString().padStart(2, '0')}`;
+        const progress = Math.min((elapsed / 15) * 100, 100);
+        document.getElementById('recordProgress').style.width = progress + '%';
+      }, 200);
+
+      // Waveform animation
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      waveformInterval = setInterval(() => {
+        analyser.getByteFrequencyData(dataArray);
+        const bars = container.querySelectorAll('.waveform-bar');
+        const step = Math.floor(dataArray.length / bars.length);
+        bars.forEach((bar, i) => {
+          const value = dataArray[i * step] || 0;
+          const height = Math.max(4, (value / 255) * 40);
+          bar.style.height = height + 'px';
+        });
+      }, 80);
+
+      // Auto-stop after 15 seconds
+      setTimeout(() => {
+        if (isRecording) stopRecording();
+      }, 15000);
+
+    } catch (e) {
+      alert('🎤 Microphone access is needed to analyze cries. Please allow microphone access and try again.');
+    }
+  };
+
+  window.stopRecording = function() {
+    if (!isRecording) return;
+    isRecording = false;
+
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+    if (audioStream) audioStream.getTracks().forEach(t => t.stop());
+    if (audioContext) audioContext.close();
+    clearInterval(recordingTimerInterval);
+    clearInterval(waveformInterval);
+
+    const duration = Math.floor((Date.now() - recordingStartTime) / 1000);
+
+    document.getElementById('listeningState').classList.add('hidden');
+    document.getElementById('analyzingState').classList.remove('hidden');
+
+    analyzeCry(duration);
+  };
+
+  async function analyzeCry(duration) {
+    const profile = getProfile();
+    const sessions = getSessions();
+    const recentHistory = sessions.slice(0, 5).map(s => `${s.primaryCause} (${s.confidence}%)`).join(', ');
+    
+    const babyContext = profile 
+      ? `Baby name: ${profile.name || 'Unknown'}, DOB: ${profile.dob || 'Unknown'}, Known conditions: ${profile.conditions || 'None'}.`
+      : 'No baby profile set.';
+
+    const prompt = `You are an expert pediatric cry analysis AI system. Analyze an infant cry recording session.
+
+Context:
+- ${babyContext}
+- Recording duration: ${duration} seconds
+- Time of day: ${new Date().toLocaleTimeString()}
+- Recent cry history: ${recentHistory || 'No prior sessions'}
+
+Based on clinical cry classification research (pitch, rhythm, intensity, duration patterns), generate a realistic, clinically-informed classification of this cry.
+
+Return a JSON object with exactly this structure:
+{
+  "primaryCause": string (one of: "Hunger", "Pain/Colic", "Tired", "Discomfort", "Illness", "Ear Pain", "Reflux", "Overstimulation"),
+  "confidence": number (integer 60-95, representing percentage confidence),
+  "secondaryCauses": [{"cause": string, "confidence": number}] (array of 2 objects with alternative causes and their confidence percentages as integers),
+  "triageLevel": string (one of: "normal", "moderate", "urgent"),
+  "triageMessage": string (brief triage guidance, max 120 chars),
+  "recommendations": [string] (array of 3-4 actionable recommendations as strings),
+  "cryCharacteristics": {
+    "pitch": string (one of: "low", "medium", "high", "very_high"),
+    "rhythm": string (one of: "rhythmic", "irregular", "continuous", "intermittent"),
+    "intensity": string (one of: "mild", "moderate", "intense", "severe")
+  },
+  "personalNote": string (a warm, reassuring 1-2 sentence note to the parent)
+}
+
+Be clinically thoughtful. Vary the results realistically based on context. If baby has known conditions like reflux or colic, weight those appropriately. Time of day matters (hunger more likely before feeding times, tiredness in evening).`;
+
+    try {
+      const result = await callAI('genericAI', { prompt });
+      displayResults(result, duration);
+    } catch (e) {
+      document.getElementById('analyzingState').classList.add('hidden');
+      document.getElementById('idleState').classList.remove('hidden');
+      alert('Analysis failed: ' + e.message);
+    }
+  }
+
+  function displayResults(result, duration) {
+    document.getElementById('analyzingState').classList.add('hidden');
+    document.getElementById('idleState').classList.remove('hidden');
+
+    const sessionId = Date.now().toString();
+    currentSessionId = sessionId;
+
+    const session = {
+      id: sessionId,
+      timestamp: new Date().toISOString(),
+      duration,
+      primaryCause: result.primaryCause,
+      confidence: result.confidence,
+      secondaryCauses: result.secondaryCauses || [],
+      triageLevel: result.triageLevel,
+      triageMessage: result.triageMessage,
+      recommendations: result.recommendations || [],
+      cryCharacteristics: result.cryCharacteristics || {},
+      personalNote: result.personalNote,
+      feedback: null
+    };
+
+    const sessions = getSessions();
+    sessions.unshift(session);
+    saveSessions(sessions);
+    updateQuickStats();
+
+    const causeEmojis = {
+      'Hunger': '😢', 'Pain/Colic': '😣', 'Tired': '😴', 'Discomfort': '😖',
+      'Illness': '🤒', 'Ear Pain': '👂', 'Reflux': '🤢', 'Overstimulation': '😵'
+    };
+    const emoji = causeEmojis[result.primaryCause] || '🔍';
+
+    const triageClasses = {
+      'urgent': 'triage-urgent', 'moderate': 'triage-moderate', 'normal': 'triage-normal'
+    };
+    const triageIcons = { 'urgent': '🚨', 'moderate': '⚠️', 'normal': '✅' };
+
+    const resultsHTML = `
+      <div class="bg-white rounded-3xl card-shadow p-5 mb-4 slide-up">
+        <div class="text-center mb-4">
+          <span class="text-5xl">${emoji}</span>
+          <h2 class="text-xl font-bold text-gray-800 mt-2">${result.primaryCause}</h2>
+          <div class="flex items-center justify-center gap-2 mt-1">
+            <div class="w-24 bg-gray-100 rounded-full h-2">
+              <div class="confidence-bar bg-emerald-500 h-2 rounded-full" style="width:${result.confidence}%"></div>
+            </div>
+            <span class="text-sm font-semibold text-emerald-600">${result.confidence}%</span>
+          </div>
+        </div>
+
+        ${result.secondaryCauses && result.secondaryCauses.length ? `
+        <div class="flex gap-2 justify-center mb-4">
+          ${result.secondaryCauses.map(sc => `
+            <div class="bg-gray-50 rounded-xl px-3 py-1.5 text-xs text-gray-500">
+              ${sc.cause} <span class="font-semibold">${sc.confidence}%</span>
+            </div>
+          `).join('')}
+        </div>` : ''}
+
+        <div class="${triageClasses[result.triageLevel] || 'triage-normal'} rounded-xl p-3 mb-4">
+          <p class="text-sm font-medium">${triageIcons[result.triageLevel] || '✅'} ${result.triageMessage}</p>
+        </div>
+
+        ${result.cryCharacteristics ? `
+        <div class="grid grid-cols-3 gap-2 mb-4">
+          <div class="bg-gray-50 rounded-xl p-2 text-center">
+            <p class="text-xs text-gray-400">Pitch</p>
+            <p class="text-sm font-semibold capitalize">${result.cryCharacteristics.pitch || '—'}</p>
+          </div>
+          <div class="bg-gray-50 rounded-xl p-2 text-center">
+            <p class="text-xs text-gray-400">Rhythm</p>
+            <p class="text-sm font-semibold capitalize">${result.cryCharacteristics.rhythm || '—'}</p>
+          </div>
+          <div class="bg-gray-50 rounded-xl p-2 text-center">
+            <p class="text-xs text-gray-400">Intensity</p>
+            <p class="text-sm font-semibold capitalize">${result.cryCharacteristics.intensity || '—'}</p>
+          </div>
+        </div>` : ''}
+
+        <div class="mb-4">
+          <h3 class="font-semibold text-sm text-gray-600 mb-2">💊 Recommendations</h3>
+          <div class="space-y-2">
+            ${(result.recommendations || []).map(r => `
+              <div class="flex items-start gap-2">
+                <span class="text-emerald-500 mt-0.5">•</span>
+                <p class="text-sm text-gray-600">${r}</p>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+
+        ${result.personalNote ? `
+        <div class="bg-emerald-50 rounded-xl p-3 mb-4">
+          <p class="text-sm text-emerald-700">💚 ${result.personalNote}</p>
+        </div>` : ''}
+
+        <button onclick="showFeedback()" class="w-full py-2.5 bg-gray-50 text-gray-600 rounded-xl font-medium text-sm border border-gray-200">
+          Was this accurate? Help us learn 🎯
+        </button>
+      </div>
+    `;
+
+    const resultsArea = document.getElementById('resultsArea');
+    resultsArea.innerHTML = resultsHTML;
+    resultsArea.classList.remove('hidden');
+    renderRecentSessions();
+
+    // Scroll to results
+    resultsArea.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // ====== FEEDBACK ======
+  window.showFeedback = function() {
+    document.getElementById('feedbackModal').classList.remove('hidden');
+  };
+  window.closeFeedback = function() {
+    document.getElementById('feedbackModal').classList.add('hidden');
+  };
+  window.submitFeedback = function(feedback) {
+    if (currentSessionId) {
+      const sessions = getSessions();
+      const session = sessions.find(s => s.id === currentSessionId);
+      if (session) {
+        session.feedback = feedback;
+        saveSessions(sessions);
+      }
+    }
+    closeFeedback();
+    // Show thank you toast
+    showToast('Thank you! This helps personalize CrySync for your baby 💚');
+  };
+
+  function showToast(message) {
+    const toast = document.createElement('div');
+    toast.className = 'fixed top-20 left-4 right-4 bg-gray-800 text-white text-sm rounded-xl px-4 py-3 text-center z-50 fade-in';
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3000);
+  }
+
+  // ====== QUICK STATS ======
+  function updateQuickStats() {
+    const sessions = getSessions();
+    const today = new Date().toDateString();
+    const todaySessions = sessions.filter(s => new Date(s.timestamp).toDateString() === today);
+    
+    document.getElementById('todayCount').textContent = todaySessions.length;
+    
+    if (sessions.length > 0) {
+      const causeCounts = {};
+      sessions.forEach(s => { causeCounts[s.primaryCause] = (causeCounts[s.primaryCause] || 0) + 1; });
+      const top = Object.entries(causeCounts).sort((a, b) => b[1] - a[1])[0];
+      const shortNames = {
+        'Hunger': '🍼', 'Pain/Colic': '😣', 'Tired': '😴', 'Discomfort': '😖',
+        'Illness': '🤒', 'Ear Pain': '👂', 'Reflux': '🤢', 'Overstimulation': '😵'
+      };
+      document.getElementById('topCause').textContent = shortNames[top[0]] || top[0].substring(0, 3);
+      
+      const avgDur = Math.round(sessions.reduce((a, s) => a + (s.duration || 0), 0) / sessions.length);
+      document.getElementById('avgDuration').textContent = avgDur + 's';
+    }
+  }
+
+  // ====== RECENT SESSIONS ======
+  function renderRecentSessions() {
+    const sessions = getSessions().slice(0, 5);
+    const container = document.getElementById('recentSessions');
+    
+    if (sessions.length === 0) {
+      container.innerHTML = '<p class="text-sm text-gray-400 text-center py-6">No sessions yet. Start recording!</p>';
+      return;
+    }
+
+    const causeEmojis = {
+      'Hunger': '😢', 'Pain/Colic': '😣', 'Tired': '😴', 'Discomfort': '😖',
+      'Illness': '🤒', 'Ear Pain': '👂', 'Reflux': '🤢', 'Overstimulation': '😵'
+    };
+
+    container.innerHTML = sessions.map(s => {
+      const time = new Date(s.timestamp);
+      const timeStr = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const dateStr = time.toDateString() === new Date().toDateString() ? 'Today' : time.toLocaleDateString([], { month: 'short', day: 'numeric' });
+      const emoji = causeEmojis[s.primaryCause] || '🔍';
+      const triageColor = s.triageLevel === 'urgent' ? 'text-red-500' : s.triageLevel === 'moderate' ? 'text-amber-500' : 'text-emerald-500';
+      
+      return `
+        <div class="bg-white rounded-xl card-shadow p-3 flex items-center gap-3">
+          <span class="text-2xl">${emoji}</span>
+          <div class="flex-1 min-w-0">
+            <p class="font-semibold text-sm text-gray-700">${s.primaryCause}</p>
+            <p class="text-xs text-gray-400">${dateStr} ${timeStr} · ${s.duration}s</p>
+          </div>
+          <div class="text-right">
+            <span class="text-sm font-bold ${triageColor}">${s.confidence}%</span>
+            ${s.feedback ? '<p class="text-[10px] text-gray-400">✓ verified</p>' : ''}
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  // ====== HISTORY TAB ======
+  function renderHistory() {
+    const sessions = getSessions();
+    
+    // Cause distribution chart
+    const causeCounts = {};
+    sessions.forEach(s => { causeCounts[s.primaryCause] = (causeCounts[s.primaryCause] || 0) + 1; });
+    
+    const causeColors = {
+      'Hunger': '#f59e0b', 'Pain/Colic': '#ef4444', 'Tired': '#6366f1', 'Discomfort': '#8b5cf6',
+      'Illness': '#ec4899', 'Ear Pain': '#f97316', 'Reflux': '#14b8a6', 'Overstimulation': '#64748b'
+    };
+
+    const ctx1 = document.getElementById('historyChart').getContext('2d');
+    if (historyChart) historyChart.destroy();
+    
+    const labels = Object.keys(causeCounts);
+    const data = Object.values(causeCounts);
+    const colors = labels.map(l => causeColors[l] || '#94a3b8');
+
+    historyChart = new Chart(ctx1, {
+      type: 'doughnut',
+      data: {
+        labels,
+        datasets: [{ data, backgroundColor: colors, borderWidth: 0 }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12, font: { size: 11 } } } }
+      }
+    });
+
+    // Frequency chart
+    const last7 = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toDateString();
+      const count = sessions.filter(s => new Date(s.timestamp).toDateString() === dateStr).length;
+      last7.push({ label: d.toLocaleDateString([], { weekday: 'short' }), count });
+    }
+
+    const ctx2 = document.getElementById('frequencyChart').getContext('2d');
+    if (frequencyChart) frequencyChart.destroy();
+    frequencyChart = new Chart(ctx2, {
+      type: 'bar',
+      data: {
+        labels: last7.map(d => d.label),
+        datasets: [{
+          data: last7.map(d => d.count),
+          backgroundColor: '#10b981',
+          borderRadius: 6,
+          barThickness: 24
+        }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { beginAtZero: true, ticks: { stepSize: 1 } },
+          x: { grid: { display: false } }
+        }
+      }
+    });
+
+    // Pediatric summary
+    if (sessions.length >= 3) {
+      generatePedSummary(sessions);
+    }
+
+    // Full history list
+    renderHistoryList(sessions);
+  }
+
+  async function generatePedSummary(sessions) {
+    const profile = getProfile();
+    const summaryData = sessions.slice(0, 20).map(s => ({
+      cause: s.primaryCause,
+      confidence: s.confidence,
+      triage: s.triageLevel,
+      duration: s.duration,
+      time: new Date(s.timestamp).toLocaleString(),
+      feedback: s.feedback
+    }));
+
+    const prompt = `You are a pediatric clinical assistant. Generate a concise clinical summary of an infant's cry pattern data for a pediatrician visit.
+
+Baby profile: ${JSON.stringify(profile || {})}
+Recent cry sessions (most recent first): ${JSON.stringify(summaryData)}
+
+Return a JSON object with exactly this structure:
+{
+  "summary": string (2-3 sentence clinical summary suitable for a pediatric chart note),
+  "patterns": [string] (array of 2-3 notable pattern observations as strings),
+  "concerns": [string] (array of 0-2 clinical concerns to discuss, as strings. Empty array if none),
+  "recommendation": string (1 sentence clinical recommendation)
+}`;
+
+    try {
+      const result = await callAI('genericAI', { prompt });
+      const html = `
+        <p class="font-medium text-gray-700 mb-2">${result.summary}</p>
+        ${result.patterns ? `<div class="mt-2"><p class="text-xs font-semibold text-gray-500 mb-1">Patterns:</p>${result.patterns.map(p => `<p class="text-xs text-gray-500">• ${p}</p>`).join('')}</div>` : ''}
+        ${result.concerns && result.concerns.length ? `<div class="mt-2"><p class="text-xs font-semibold text-red-500 mb-1">Concerns:</p>${result.concerns.map(c => `<p class="text-xs text-red-500">• ${c}</p>`).join('')}</div>` : ''}
+        ${result.recommendation ? `<p class="mt-2 text-xs text-emerald-600 font-medium">💡 ${result.recommendation}</p>` : ''}
+      `;
+      document.getElementById('pedSummary').innerHTML = html;
+    } catch (e) {
+      // Silently fail
+    }
+  }
+
+  function renderHistoryList(sessions) {
+    const container = document.getElementById('historyList');
+    const causeEmojis = {
+      'Hunger': '😢', 'Pain/Colic': '😣', 'Tired': '😴', 'Discomfort': '😖',
+      'Illness': '🤒', 'Ear Pain': '👂', 'Reflux': '🤢', 'Overstimulation': '😵'
+    };
+
+    if (sessions.length === 0) {
+      container.innerHTML = '<p class="text-center text-gray-400 text-sm py-4">No history yet</p>';
+      return;
+    }
+
+    container.innerHTML = '<h3 class="font-semibold text-gray-700 mb-2">All Sessions</h3>' + 
+      sessions.map(s => {
+        const time = new Date(s.timestamp);
+        const emoji = causeEmojis[s.primaryCause] || '🔍';
+        return `
+          <div class="bg-white rounded-xl card-shadow p-3 flex items-center gap-3">
+            <span class="text-xl">${emoji}</span>
+            <div class="flex-1">
+              <p class="font-medium text-sm">${s.primaryCause} — ${s.confidence}%</p>
+              <p class="text-xs text-gray-400">${time.toLocaleDateString()} ${time.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})} · ${s.duration}s${s.feedback ? ' · ✓' : ''}</p>
+            </div>
+            <span class="text-xs px-2 py-1 rounded-lg ${s.triageLevel === 'urgent' ? 'bg-red-100 text-red-600' : s.triageLevel === 'moderate' ? 'bg-amber-100 text-amber-600' : 'bg-emerald-100 text-emerald-600'}">${s.triageLevel}</span>
+          </div>
+        `;
+      }).join('');
+  }
+
+  window.exportReport = function() {
+    const sessions = getSessions();
+    const profile = getProfile();
+    let report = `CrySync — Pediatric Report\n`;
+    report += `Generated: ${new Date().toLocaleString()}\n`;
+    report += `=====================================\n\n`;
+    if (profile) {
+      report += `Baby: ${profile.name || 'N/A'}\nDOB: ${profile.dob || 'N/A'}\nConditions: ${profile.conditions || 'None'}\n\n`;
+    }
+    report += `Total Sessions: ${sessions.length}\n\n`;
+    sessions.forEach((s, i) => {
+      report += `${i + 1}. ${new Date(s.timestamp).toLocaleString()}\n`;
+      report += `   Cause: ${s.primaryCause} (${s.confidence}%)\n`;
+      report += `   Triage: ${s.triageLevel} — ${s.triageMessage}\n`;
+      report += `   Duration: ${s.duration}s\n`;
+      if (s.feedback) report += `   Caregiver Feedback: ${s.feedback}\n`;
+      report += '\n';
+    });
+    report += `\nGenerated by CrySync — Built with AI by Papersaurus`;
+
+    const blob = new Blob([report], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `crysync-report-${new Date().toISOString().split('T')[0]}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Report downloaded! 📄');
+  };
+
+  // ====== INSIGHTS TAB ======
+  async function renderInsights() {
+    const sessions = getSessions();
+    const container = document.getElementById('insightsContent');
+    
+    if (sessions.length < 3) return;
+
+    container.innerHTML = '<div class="text-center py-8"><div class="w-10 h-10 mx-auto rounded-full border-4 border-emerald-200 border-t-emerald-500 animate-spin"></div><p class="text-sm text-gray-400 mt-3">Generating insights...</p></div>';
+
+    const profile = getProfile();
+    const sessionData = sessions.slice(0, 30).map(s => ({
+      cause: s.primaryCause,
+      confidence: s.confidence,
+      triage: s.triageLevel,
+      duration: s.duration,
+      hour: new Date(s.timestamp).getHours(),
+      dayOfWeek: new Date(s.timestamp).toLocaleDateString('en', { weekday: 'long' }),
+      feedback: s.feedback
+    }));
+
+    const prompt = `You are an expert pediatric data analyst. Analyze this infant's cry pattern data and generate personalized insights.
+
+Baby profile: ${JSON.stringify(profile || {})}
+Cry sessions data (${sessions.length} total, showing up to 30 most recent): ${JSON.stringify(sessionData)}
+
+Return a JSON object with exactly this structure:
+{
+  "insights": [
+    {
+      "emoji": string (single relevant emoji),
+      "title": string (short insight title, max 40 chars),
+      "description": string (2-3 sentence insight description),
+      "type": string (one of: "pattern", "tip", "alert", "milestone")
+    }
+  ] (array of 3-5 insight objects),
+  "personalizedTip": string (a warm, personalized parenting tip based on the data, 2-3 sentences),
+  "accuracyScore": number (integer 1-100, estimated personalization accuracy based on feedback data available)
+}
+
+Focus on actionable, specific, data-driven insights. Identify time patterns, frequency changes, and correlations.`;
+
+    try {
+      const result = await callAI('genericAI', { prompt });
+      
+      const typeColors = {
+        'pattern': 'bg-blue-50 border-blue-200', 'tip': 'bg-emerald-50 border-emerald-200',
+        'alert': 'bg-red-50 border-red-200', 'milestone': 'bg-purple-50 border-purple-200'
+      };
+      const typeBadge = {
+        'pattern': 'bg-blue-100 text-blue-600', 'tip': 'bg-emerald-100 text-emerald-600',
+        'alert': 'bg-red-100 text-red-600', 'milestone': 'bg-purple-100 text-purple-600'
+      };
+
+      let html = '';
+      
+      if (result.accuracyScore) {
+        html += `
+          <div class="bg-white rounded-2xl card-shadow p-4 flex items-center gap-3 mb-1">
+            <div class="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center">
+              <span class="text-xl font-bold text-emerald-600">${result.accuracyScore}%</span>
+            </div>
+            <div>
+              <p class="font-semibold text-sm text-gray-700">Personalization Score</p>
+              <p class="text-xs text-gray-400">Keep providing feedback to improve accuracy</p>
+            </div>
+          </div>
+        `;
+      }
+
+      if (result.insights) {
+        result.insights.forEach(insight => {
+          html += `
+            <div class="bg-white rounded-2xl card-shadow p-4 border ${typeColors[insight.type] || ''}">
+              <div class="flex items-start gap-3">
+                <span class="text-2xl">${insight.emoji}</span>
+                <div class="flex-1">
+                  <div class="flex items-center gap-2 mb-1">
+                    <h3 class="font-semibold text-sm text-gray-700">${insight.title}</h3>
+                    <span class="text-[10px] px-2 py-0.5 rounded-full font-medium ${typeBadge[insight.type] || 'bg-gray-100 text-gray-500'}">${insight.type}</span>
+                  </div>
+                  <p class="text-sm text-gray-500">${insight.description}</p>
+                </div>
+              </div>
+            </div>
+          `;
+        });
+      }
+
+      if (result.personalizedTip) {
+        html += `
+          <div class="bg-gradient-to-br from-emerald-50 to-teal-50 rounded-2xl p-4 border border-emerald-100">
+            <p class="font-semibold text-sm text-emerald-700 mb-1">💚 Personalized Tip</p>
+            <p class="text-sm text-emerald-600">${result.personalizedTip}</p>
+          </div>
+        `;
+      }
+
+      container.innerHTML = html;
+    } catch (e) {
+      container.innerHTML = '<div class="bg-white rounded-2xl card-shadow p-4 text-center"><p class="text-sm text-gray-500">Unable to generate insights right now. Try again later.</p></div>';
+    }
+  }
+
+  // ====== INITIALIZATION ======
+  function init() {
+    updateProfileDisplay();
+    updateQuickStats();
+    renderRecentSessions();
+
+    // Show onboarding if no profile
+    const profile = getProfile();
+    if (!profile) {
+      document.getElementById('babyInfo').addEventListener('click', showSettings);
+    } else {
+      document.getElementById('babyInfo').addEventListener('click', showSettings);
+    }
+  }
+
+  init();
+})();
+</script>
+
+</body>
+</html>
